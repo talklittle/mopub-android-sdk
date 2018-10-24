@@ -4,8 +4,10 @@
 
 package com.mopub.network;
 
+import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Looper;
 import android.support.annotation.NonNull;
@@ -17,6 +19,7 @@ import android.webkit.WebView;
 import com.mopub.common.Constants;
 import com.mopub.common.Preconditions;
 import com.mopub.common.VisibleForTesting;
+import com.mopub.common.util.AsyncTasks;
 import com.mopub.common.util.DeviceUtils;
 import com.mopub.volley.Cache;
 import com.mopub.volley.Network;
@@ -28,6 +31,8 @@ import com.mopub.volley.toolbox.HurlStack;
 import com.mopub.volley.toolbox.ImageLoader;
 
 import java.io.File;
+import java.lang.ref.WeakReference;
+import java.util.concurrent.TimeUnit;
 
 import javax.net.ssl.SSLSocketFactory;
 
@@ -35,6 +40,7 @@ public class Networking {
     @VisibleForTesting
     static final String CACHE_DIRECTORY_NAME = "mopub-volley-cache";
     private static final String DEFAULT_USER_AGENT = System.getProperty("http.agent");
+    private static final long USER_AGENT_TASK_TIMEOUT_MILLIS = 2000L;
 
     // These are volatile so that double-checked locking works.
     // See https://en.wikipedia.org/wiki/Double-checked_locking#Usage_in_Java
@@ -146,7 +152,9 @@ public class Networking {
                 if (userAgent == null) {
                     try {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
-                            userAgent = WebSettings.getDefaultUserAgent(context);
+                            WebSettingsUserAgentTask task = new WebSettingsUserAgentTask(context);
+                            AsyncTasks.safeExecuteOnExecutor(task);
+                            userAgent = task.get(USER_AGENT_TASK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
                         } else if (Looper.myLooper() == Looper.getMainLooper()) {
                             // WebViews may only be instantiated on the UI thread. If anything goes
                             // wrong with getting a user agent, use the system-specific user agent.
@@ -165,6 +173,25 @@ public class Networking {
         }
 
         return userAgent;
+    }
+
+    @TargetApi(Build.VERSION_CODES.JELLY_BEAN_MR1)
+    private static class WebSettingsUserAgentTask extends AsyncTask<Void, Void, String> {
+        private final WeakReference<Context> mContextRef;
+
+        WebSettingsUserAgentTask(Context context) {
+            mContextRef = new WeakReference<>(context);
+        }
+
+        @Override
+        protected String doInBackground(Void... voids) {
+            Context context = mContextRef.get();
+            if (context != null) {
+                return WebSettings.getDefaultUserAgent(context);
+            } else {
+                return DEFAULT_USER_AGENT;
+            }
+        }
     }
 
     /**
